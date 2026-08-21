@@ -23,18 +23,18 @@
 #include <fstream>
 #include <sstream>
 
-// Windows <windows.h> defines GetObject as a macro (GetObjectA/GetObjectW)
-// which collides with PoDoFo's PdfObject::GetObject(). Undefine it.
-#ifdef GetObject
-#undef GetObject
-#endif
-
 #include <podofo/podofo.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <CoreFoundation/CoreFoundation.h>
+#endif
+
+// Windows <windows.h> defines GetObject as a macro (GetObjectA/GetObjectW)
+// which collides with PoDoFo's PdfObject::GetObject(). Undefine it.
+#ifdef GetObject
+#undef GetObject
 #endif
 
 static void doPdfToPdfa(PA_PluginParameters params);
