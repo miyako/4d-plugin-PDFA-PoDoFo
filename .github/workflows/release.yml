@@ -1,49 +1,50 @@
-name: Release
+name: Build & Release
 
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build (e.g. v2.3.0)
+        required: true
+
+permissions:
+  contents: write
 
 env:
   PRODUCT_NAME: PDFA
+  MACOS_DEPLOYMENT_TARGET: '10.13'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-mac:
-    name: Build macOS (arm64)
-    runs-on: macos-latest
+
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.set.outputs.tag }}
+      version: ${{ steps.set.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install PoDoFo
-        run: brew install podofo
-
-      - name: Build
+      - id: set
         run: |
-          cd PDFA
-          mkdir cmake-build && cd cmake-build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          cmake --build .
-
-      - name: Package
-        run: |
-          cd PDFA/PDFA-test/Plugins
-          zip -r ${{ github.workspace }}/PDFA-macOS.zip PDFA.bundle
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: PDFA-macOS
-          path: PDFA-macOS.zip
+          TAG="${{ inputs.tag || github.ref_name }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
   build-windows:
     name: Build Windows (x64)
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.tag }}
           submodules: recursive
+          fetch-depth: 0
 
       - name: Install vcpkg and PoDoFo
         run: |
@@ -51,45 +52,122 @@ jobs:
           C:\vcpkg\bootstrap-vcpkg.bat
           C:\vcpkg\vcpkg.exe install podofo:x64-windows
 
-      - name: Build
+      - name: build with CMake
+        shell: pwsh
         run: |
-          cd PDFA
+          cd ${{ env.PRODUCT_NAME }}
           mkdir cmake-build; cd cmake-build
           cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
           cmake --build . --config Release
 
-      - name: Package
-        run: |
-          cd PDFA\PDFA-test\Plugins
-          Compress-Archive -Path PDFA -DestinationPath ${{ github.workspace }}\PDFA-Windows.zip
-
-      - name: Upload artifact
+      - name: upload windows binaries
         uses: actions/upload-artifact@v4
         with:
-          name: PDFA-Windows
-          path: PDFA-Windows.zip
+          name: windows-binaries
+          path: |
+            ${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
+          if-no-files-found: error
 
-  version:
-    runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.tag.outputs.TAG }}
+  build-macos:
+    name: Build macOS, package, sign, notarize & release
+    needs: [version, build-windows]
+    runs-on: macos-latest
     steps:
-      - id: tag
-        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          submodules: recursive
+          fetch-depth: 0
 
-  release:
-    needs: [build-mac, build-windows, version]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
+      - name: Install PoDoFo
+        run: brew install podofo
 
-      - name: Create Release
+      - name: download windows binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-binaries
+          path: winbuild
+
+      - name: import Developer ID certificate
+        env:
+          CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+
+          echo -n "$CERT_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: store notarytool credentials
+        env:
+          APPLE_ID: ${{ secrets.NOTARYTOOL_APPLE_ID }}
+          TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
+          APP_PASSWORD: ${{ secrets.NOTARYTOOL_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials "notarytool-profile" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$TEAM_ID" \
+            --password "$APP_PASSWORD" \
+            --keychain "$KEYCHAIN_PATH"
+
+      - name: build macOS plugin
+        run: |
+          cd ${{ env.PRODUCT_NAME }}
+          mkdir -p cmake-build && cd cmake-build
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}"
+          cmake --build .
+
+      - name: merge Windows binaries into the bundle
+        run: |
+          set -euo pipefail
+          BUNDLE="${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}.bundle"
+          mkdir -p "$BUNDLE/Contents/Windows64"
+          cp "winbuild/${{ env.PRODUCT_NAME }}.4DX" "$BUNDLE/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX"
+          echo "BUNDLE_PATH=$BUNDLE" >> "$GITHUB_ENV"
+
+      - name: codesign
+        run: |
+          set -euo pipefail
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          echo "Signing with: $IDENTITY"
+          codesign --verbose --deep --timestamp --force --options=runtime \
+            --sign "$IDENTITY" "$BUNDLE_PATH"
+
+      - name: package, notarize & staple
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.version }}"
+          ZIP_PATH="${{ env.PRODUCT_NAME }}-${VERSION}.zip"
+          DMG_PATH="${{ env.PRODUCT_NAME }}-${VERSION}.dmg"
+
+          ditto -c -k --keepParent "$BUNDLE_PATH" "$ZIP_PATH"
+          hdiutil create -format UDBZ -volname "${{ env.PRODUCT_NAME }}" -srcfolder "$BUNDLE_PATH" "$DMG_PATH"
+
+          xcrun notarytool submit "$ZIP_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
+          xcrun notarytool submit "$DMG_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
+          xcrun stapler staple "$DMG_PATH"
+
+          echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
+          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+
+      - name: create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
           name: ${{ needs.version.outputs.tag }}
           files: |
-            PDFA-macOS/PDFA-macOS.zip
-            PDFA-Windows/PDFA-Windows.zip
+            ${{ env.ZIP_PATH }}
+            ${{ env.DMG_PATH }}
