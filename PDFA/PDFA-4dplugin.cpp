@@ -23,6 +23,12 @@
 #include <fstream>
 #include <sstream>
 
+// Windows <windows.h> defines GetObject as a macro (GetObjectA/GetObjectW)
+// which collides with PoDoFo's PdfObject::GetObject(). Undefine it.
+#ifdef GetObject
+#undef GetObject
+#endif
+
 #include <podofo/podofo.h>
 
 #ifdef _WIN32
