@@ -1,0 +1,17 @@
+{
+  "id": 32000,
+  "name": "PDFA",
+  "commands": [
+    {
+      "id": 1,
+      "name": "PDF TO PDFA",
+      "theme": "PDF",
+      "syntax": "PDF TO PDFA({&T, Text};{&T, Text}):J",
+      "params": [
+        {"name": "inputPath", "type": "text", "direction": "in"},
+        {"name": "outputPath", "type": "text", "direction": "in"}
+      ],
+      "returnType": "object"
+    }
+  ]
+}

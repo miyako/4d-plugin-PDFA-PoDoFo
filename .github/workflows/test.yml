@@ -1,0 +1,72 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PRODUCT_NAME: PDFA
+
+jobs:
+  build-mac:
+    name: Build macOS (arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install PoDoFo
+        run: brew install podofo
+
+      - name: Build with CMake
+        run: |
+          cd PDFA
+          mkdir cmake-build && cd cmake-build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          cmake --build .
+
+      - name: Verify exports
+        run: |
+          nm -gU PDFA/cmake-build/PDFA.bundle/Contents/MacOS/PDFA | grep _PluginMain
+          nm -gU PDFA/cmake-build/PDFA.bundle/Contents/MacOS/PDFA | grep _FourDPackex
+
+      - name: Verify Resources
+        run: |
+          test -f PDFA/PDFA-test/Plugins/PDFA.bundle/Contents/Resources/manifest.json
+          test -f PDFA/PDFA-test/Plugins/PDFA.bundle/Contents/Resources/sRGB.icc
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDFA-macOS
+          path: PDFA/PDFA-test/Plugins/PDFA.bundle
+
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install vcpkg and PoDoFo
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg.exe install podofo:x64-windows
+
+      - name: Build with CMake
+        run: |
+          cd PDFA
+          mkdir cmake-build; cd cmake-build
+          cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+          cmake --build . --config Release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDFA-Windows
+          path: PDFA/PDFA-test/Plugins/PDFA/Contents/Windows64/PDFA.4DX
