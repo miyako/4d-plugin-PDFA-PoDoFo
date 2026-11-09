@@ -1,14 +1,7 @@
-name: Build & Release
+name: Build
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing tag to build (e.g. v2.3.0)
-        required: true
 
 permissions:
   contents: write
@@ -18,7 +11,7 @@ env:
   MACOS_DEPLOYMENT_TARGET: '10.13'
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-publication
   cancel-in-progress: false
 
 jobs:
@@ -29,11 +22,16 @@ jobs:
       tag: ${{ steps.set.outputs.tag }}
       version: ${{ steps.set.outputs.version }}
     steps:
-      - id: set
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate source version and publication availability
+        id: set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTED_SHA: ${{ github.sha }}
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/release.py available --sha "$SELECTED_SHA"
 
   build-windows:
     name: Build Windows (x64)
@@ -42,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
 
@@ -87,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
 
@@ -155,6 +153,14 @@ jobs:
           ls -l "$BUNDLE/Contents/Windows64"
           echo "BUNDLE_PATH=$BUNDLE" >> "$GITHUB_ENV"
 
+      - name: verify bundle exports and resources
+        run: |
+          set -euo pipefail
+          nm -gU "$BUNDLE_PATH/Contents/MacOS/PDFA" | grep _PluginMain
+          nm -gU "$BUNDLE_PATH/Contents/MacOS/PDFA" | grep _FourDPackex
+          test -f "$BUNDLE_PATH/Contents/Resources/manifest.json"
+          test -f "$BUNDLE_PATH/Contents/Resources/sRGB.icc"
+
       - name: codesign
         run: |
           set -euo pipefail
@@ -163,6 +169,7 @@ jobs:
           echo "Signing with: $IDENTITY"
           codesign --verbose --deep --timestamp --force --options=runtime \
             --sign "$IDENTITY" "$BUNDLE_PATH"
+          codesign --verify --deep --strict --verbose=2 "$BUNDLE_PATH"
 
       - name: package, notarize & staple
         run: |
@@ -174,18 +181,27 @@ jobs:
           ditto -c -k --keepParent "$BUNDLE_PATH" "$ZIP_PATH"
           hdiutil create -format UDBZ -volname "${{ env.PRODUCT_NAME }}" -srcfolder "$BUNDLE_PATH" "$DMG_PATH"
 
-          xcrun notarytool submit "$ZIP_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
-          xcrun notarytool submit "$DMG_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
+          xcrun notarytool submit "$ZIP_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait --output-format json > "$RUNNER_TEMP/zip-notary.json"
+          xcrun notarytool submit "$DMG_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait --output-format json > "$RUNNER_TEMP/dmg-notary.json"
+          python3 -c 'import json, sys; reports = [json.load(open(p)) for p in sys.argv[1:]]; print(reports); sys.exit(0 if all(r.get("status") == "Accepted" for r in reports) else 1)' "$RUNNER_TEMP/zip-notary.json" "$RUNNER_TEMP/dmg-notary.json"
           xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
 
           echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
           echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
 
-      - name: create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: upload verified release packages
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: ${{ needs.version.outputs.tag }}
-          files: |
+          name: release-packages
+          path: |
             ${{ env.ZIP_PATH }}
             ${{ env.DMG_PATH }}
+          if-no-files-found: error
+
+      - name: tag selected commit and create new GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTED_SHA: ${{ github.sha }}
+        run: |
+          python3 .github/scripts/release.py publish --sha "$SELECTED_SHA" "$ZIP_PATH" "$DMG_PATH"
