@@ -52,21 +52,33 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install vcpkg and PoDoFo
+      - name: Install vcpkg and PoDoFo (static, /MT)
+        shell: pwsh
         run: |
           git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          C:\vcpkg\bootstrap-vcpkg.bat
-          C:\vcpkg\vcpkg.exe install podofo:x64-windows
+          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          C:\vcpkg\vcpkg.exe install podofo:x64-windows-static-release --overlay-triplets="$env:GITHUB_WORKSPACE\vcpkg-triplets"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Build with CMake
+        shell: pwsh
         run: |
           cd PDFA
           mkdir cmake-build; cd cmake-build
-          cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+          cmake .. -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-release `
+            -DVCPKG_OVERLAY_TRIPLETS="$env:GITHUB_WORKSPACE\vcpkg-triplets"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build . --config Release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Verify DLL dependencies
+        shell: pwsh
+        run: ./.github/scripts/verify-windows-deps.ps1 -Dir PDFA/PDFA-test/Plugins/PDFA/Contents/Windows64 -Binary PDFA.4DX
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: PDFA-Windows
-          path: PDFA/PDFA-test/Plugins/PDFA/Contents/Windows64/PDFA.4DX
+          path: PDFA/PDFA-test/Plugins/PDFA/Contents/Windows64/
