@@ -13,32 +13,32 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: bump-version-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   bump:
+    if: github.ref_type == 'branch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Bump version
-        id: bump
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
-          VERSION=$(cat VERSION)
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-          case "${{ inputs.bump }}" in
-            major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR+1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH+1)) ;;
-          esac
-          NEW="${MAJOR}.${MINOR}.${PATCH}"
-          echo "$NEW" > VERSION
-          echo "TAG=v${NEW}" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/release.py bump --bump "$BUMP"
 
-      - name: Commit and tag
+      - name: Commit metadata to selected branch
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add VERSION
+          git add VERSION PDFA/Info.plist
           git commit -m "Bump version to $(cat VERSION)"
-          TAG=${{ steps.bump.outputs.TAG }}
-          git tag "$TAG"
-          git push && git push origin "$TAG"
+          git push --no-follow-tags origin "HEAD:refs/heads/$BRANCH"

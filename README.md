@@ -76,6 +76,65 @@ cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.
 cmake --build . --config Release
 ```
 
+## Versioning and releases
+
+`VERSION` is the authoritative strict `X.Y.Z` version (no leading zeros).
+`PDFA/Info.plist`'s `CFBundleVersion` must match it; there is no independent
+build counter. The lifecycle migration aligns the stale source plist from
+`1.0.0` to the existing `1.0.5` without a release-version increment. The tracked
+prebuilt test bundle is deliberately unchanged. Manifest command IDs, the plist
+schema version, PoDoFo/PDF versions, and deployment targets are not release metadata.
+
+1. Run **Bump Version** on the desired branch and choose `bump`: `patch`, `minor`,
+   or `major`. It validates and commits only `VERSION` and `PDFA/Info.plist` to
+   that selected branch. The non-force, explicit branch push disables follow-tags;
+   a concurrent branch update rejects the stale push. It creates no tag/release
+   and does not start Build.
+2. Run **Build** separately on the desired branch/ref. There are no typed inputs,
+   only GitHub's ref selector. All checkouts use the event's immutable `github.sha`,
+   not a moving branch or tag. Preflight rejects malformed/drifted source versions,
+   an existing `vX.Y.Z` tag or published/draft release, and
+   API/authentication/network errors before native builds start. The authenticated
+   release listing includes drafts and all pages; only a successful, complete,
+   well-formed listing with no matching tag means release absence. A failed page,
+   malformed response, or listing 404 fails closed.
+3. Windows static PoDoFo/CRT building and DLL verification precede the macOS
+   arm64 PoDoFo build. Bundle export/resource checks, signing verification, ZIP
+   and DMG notarization (both must be `Accepted`), and DMG stapling/validation must
+   succeed. Verified ZIP/DMG packages are also retained as workflow artifacts.
+   Only then does publication recheck availability, non-force push `vX.Y.Z`
+   directly at the selected SHA with follow-tags disabled, and create a **new**
+   release containing `PDFA-X.Y.Z.zip` and `PDFA-X.Y.Z.dmg`.
+
+Build publication is serialized repository-wide across branches, without
+cancelling an active run. GitHub concurrency may replace older pending runs;
+it is not a FIFO release queue. There is no main-only publication restriction.
+Existing tag/release state is never overwritten or deleted. Publication is not
+atomic: a failed/ambiguous tag push needs remote inspection; a release/API/upload
+failure after a successful tag push may leave a tag alone or a partial release.
+Release creation uses a create-only REST request followed by uploads without
+`--clobber`, rather than `gh release create`'s automatic draft-deletion cleanup.
+Rerunning Build then fails preflight. Inspect the exact remote tag SHA, release
+state, logs, and retained verified package artifacts, and manually complete only
+the missing publication work after review. Do not delete/retarget tags or
+overwrite assets to make a rerun pass.
+
+Build is manual-only; tag pushes no longer start it. The separate **Build and
+Test** workflow remains automatic for pushes to `main` and pull requests targeting
+`main`. No signing/notarization secret names or native build dependencies change.
+
+Focused local lifecycle regressions (no native builds, signing, or publication):
+
+```bash
+python3 -m pip install -r .github/tests/requirements.txt
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/tests -v
+actionlint
+```
+
+Tests use fixed version-independent fixtures, live source consistency checks,
+isolated local Git remotes, and a full-suite rerun after bumping a temporary source
+copy. No remote tag, release, or workflow is created by these checks.
+
 ## License
 
 - Plugin code: MIT
