@@ -9,6 +9,12 @@ if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64")
 endif()
 
+if(MSVC)
+    # Static CRT (/MT) so the .4DX does not need the VC++ redistributable.
+    # Must match the vcpkg triplet (x64-windows-static-release, VCPKG_CRT_LINKAGE static).
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 set(SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../4D-Plugin-SDK/4D Plugin API")
 
 add_library(PDFA MODULE
@@ -26,8 +32,13 @@ if(APPLE)
 endif()
 
 # PoDoFo — find via pkg-config or cmake find_package
-# Install: brew install podofo (macOS), vcpkg install podofo (Windows)
-find_package(PkgConfig QUIET)
+# Install: brew install podofo (macOS),
+#          vcpkg install podofo:x64-windows-static-release --overlay-triplets=vcpkg-triplets (Windows)
+# On Windows always use the CMake config package: it carries the transitive
+# static dependencies (OpenSSL, libxml2, freetype, ...) that pkg-config would miss.
+if(NOT WIN32)
+    find_package(PkgConfig QUIET)
+endif()
 if(PkgConfig_FOUND)
     pkg_check_modules(PODOFO REQUIRED libpodofo)
     target_include_directories(PDFA PRIVATE ${PODOFO_INCLUDE_DIRS})

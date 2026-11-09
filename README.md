@@ -50,7 +50,7 @@ This approach works well when the input PDF is already "clean" (embedded fonts, 
 - 4D Plugin SDK (included as submodule)
 - PoDoFo library:
   - macOS: `brew install podofo`
-  - Windows: `vcpkg install podofo`
+  - Windows: `vcpkg install podofo:x64-windows-static-release --overlay-triplets=vcpkg-triplets` (static libraries + static CRT, so the `.4DX` needs no extra DLLs)
 
 ### Clone
 
@@ -72,14 +72,14 @@ cmake --build .
 ```bash
 cd PDFA
 mkdir cmake-build && cd cmake-build
-cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
+cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static-release -DVCPKG_OVERLAY_TRIPLETS=../../vcpkg-triplets
 cmake --build . --config Release
 ```
 
 ## License
 
 - Plugin code: MIT
-- PoDoFo: LGPL-2.0+ (dynamically linked)
+- PoDoFo: LGPL-2.0+ OR MPL-2.0 (dynamically linked on macOS; statically linked on Windows, used under MPL-2.0)
 - sRGB ICC profile: public domain
 
 ## Limitations

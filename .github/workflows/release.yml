@@ -46,26 +46,38 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install vcpkg and PoDoFo
+      - name: Install vcpkg and PoDoFo (static, /MT)
+        shell: pwsh
         run: |
           git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          C:\vcpkg\bootstrap-vcpkg.bat
-          C:\vcpkg\vcpkg.exe install podofo:x64-windows
+          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          C:\vcpkg\vcpkg.exe install podofo:x64-windows-static-release --overlay-triplets="$env:GITHUB_WORKSPACE\vcpkg-triplets"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: build with CMake
         shell: pwsh
         run: |
           cd ${{ env.PRODUCT_NAME }}
           mkdir cmake-build; cd cmake-build
-          cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+          cmake .. -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-release `
+            -DVCPKG_OVERLAY_TRIPLETS="$env:GITHUB_WORKSPACE\vcpkg-triplets"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build . --config Release
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: verify DLL dependencies
+        shell: pwsh
+        run: ./.github/scripts/verify-windows-deps.ps1 -Dir "${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}/Contents/Windows64" -Binary "${{ env.PRODUCT_NAME }}.4DX"
 
       - name: upload windows binaries
         uses: actions/upload-artifact@v4
         with:
           name: windows-binaries
-          path: |
-            ${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
+          # whole Windows64 directory: the .4DX plus any runtime DLLs it needs
+          # (none for the static build; completeness verified above)
+          path: ${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}/Contents/Windows64/
           if-no-files-found: error
 
   build-macos:
@@ -134,7 +146,13 @@ jobs:
           set -euo pipefail
           BUNDLE="${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}.bundle"
           mkdir -p "$BUNDLE/Contents/Windows64"
-          cp "winbuild/${{ env.PRODUCT_NAME }}.4DX" "$BUNDLE/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX"
+          if [ ! -f "winbuild/${{ env.PRODUCT_NAME }}.4DX" ]; then
+            echo "::error::winbuild/${{ env.PRODUCT_NAME }}.4DX not found"
+            ls -R winbuild || true
+            exit 1
+          fi
+          cp winbuild/* "$BUNDLE/Contents/Windows64/"
+          ls -l "$BUNDLE/Contents/Windows64"
           echo "BUNDLE_PATH=$BUNDLE" >> "$GITHUB_ENV"
 
       - name: codesign
