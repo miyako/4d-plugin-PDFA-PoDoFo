@@ -107,19 +107,26 @@ def api_result(status, code=1):
     return subprocess.CompletedProcess([], code, f"HTTP/2.0 {status} Test\n\n{{}}\n", "API error")
 
 
+def release_pages(*pages):
+    return subprocess.CompletedProcess([], 0, json.dumps(pages), "")
+
+
 class AvailabilityTests(unittest.TestCase):
     @patch.object(release.subprocess, "run")
     def test_only_confirmed_missing_tag_and_release_are_available(self, run):
-        run.side_effect = [api_result(200, 0), api_result(404), api_result(404)]
+        run.side_effect = [api_result(200, 0), api_result(404), release_pages([])]
         release.check_available("owner/repo", "v7.8.9")
         self.assertEqual(run.call_count, 3)
         self.assertEqual(run.call_args_list[0].args[0], ["gh", "api", "repos/owner/repo"])
         self.assertIn("repos/owner/repo/git/ref/tags/v7.8.9", run.call_args_list[1].args[0])
-        self.assertIn("repos/owner/repo/releases/tags/v7.8.9", run.call_args_list[2].args[0])
+        self.assertEqual(run.call_args_list[2].args[0], [
+            "gh", "api", "--paginate", "--slurp", "repos/owner/repo/releases?per_page=100",
+        ])
 
     @patch.object(release.subprocess, "run")
     def test_existing_tag_or_release(self, run):
-        for results in ([api_result(200, 0)], [api_result(404), api_result(200, 0)]):
+        for results in ([api_result(200, 0)], [api_result(404), release_pages([
+                {"tag_name": "v7.8.9", "draft": False}])]):
             run.side_effect = [api_result(200, 0)] + results
             with self.assertRaisesRegex(ValueError, "already exists"):
                 release.check_available("owner/repo", "v7.8.9")
@@ -133,6 +140,45 @@ class AvailabilityTests(unittest.TestCase):
             for prefix in ([], [api_result(404)]):
                 run.side_effect = [api_result(200, 0)] + prefix + [error]
                 with self.assertRaisesRegex(RuntimeError, "Cannot establish"):
+                    release.check_available("owner/repo", "v7.8.9")
+
+    @patch.object(release.subprocess, "run")
+    def test_same_tag_draft_without_git_tag_on_page_two_rejects(self, run):
+        run.side_effect = [api_result(200, 0), api_result(404), release_pages(
+            [{"tag_name": "v6.0.0", "draft": False}],
+            [{"tag_name": "v7.8.9", "draft": True}],
+        )]
+        with self.assertRaisesRegex(ValueError, "published or draft"):
+            release.check_available("owner/repo", "v7.8.9")
+
+    @patch.object(release.subprocess, "run")
+    def test_complete_paginated_no_match_including_other_drafts_is_available(self, run):
+        run.side_effect = [api_result(200, 0), api_result(404), release_pages(
+            [{"tag_name": "v6.0.0", "draft": False}],
+            [{"tag_name": "v8.0.0", "draft": True}],
+        )]
+        release.check_available("owner/repo", "v7.8.9")
+
+    @patch.object(release.subprocess, "run")
+    def test_listing_failure_after_partial_page_is_not_absence(self, run):
+        run.side_effect = [api_result(200, 0), api_result(404), subprocess.CompletedProcess(
+            [], 1, json.dumps([[{"tag_name": "v6.0.0", "draft": False}]]),
+            "page 2 failed",
+        )]
+        with self.assertRaisesRegex(RuntimeError, "page 2 failed"):
+            release.check_available("owner/repo", "v7.8.9")
+
+    @patch.object(release.subprocess, "run")
+    def test_malformed_listing_is_not_absence(self, run):
+        for data in ("", "not JSON", "null", "{}", "[]", "[{}]", "[null]",
+                     "[[null]]", "[[{}]]", '[[{"tag_name": null, "draft": true}]]',
+                     '[[{"tag_name": "v6.0.0"}]]',
+                     '[[{"tag_name": "v6.0.0", "draft": "true"}]]',
+                     '[[], {"message": "page 2 failed"}]'):
+            with self.subTest(data=data):
+                run.side_effect = [api_result(200, 0), api_result(404),
+                                   subprocess.CompletedProcess([], 0, data, "")]
+                with self.assertRaisesRegex(RuntimeError, "malformed"):
                     release.check_available("owner/repo", "v7.8.9")
 
     @patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess(

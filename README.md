@@ -93,8 +93,11 @@ schema version, PoDoFo/PDF versions, and deployment targets are not release meta
 2. Run **Build** separately on the desired branch/ref. There are no typed inputs,
    only GitHub's ref selector. All checkouts use the event's immutable `github.sha`,
    not a moving branch or tag. Preflight rejects malformed/drifted source versions,
-   an existing `vX.Y.Z` tag or release, and API/authentication/network errors before
-   native builds start.
+   an existing `vX.Y.Z` tag or published/draft release, and
+   API/authentication/network errors before native builds start. The authenticated
+   release listing includes drafts and all pages; only a successful, complete,
+   well-formed listing with no matching tag means release absence. A failed page,
+   malformed response, or listing 404 fails closed.
 3. Windows static PoDoFo/CRT building and DLL verification precede the macOS
    arm64 PoDoFo build. Bundle export/resource checks, signing verification, ZIP
    and DMG notarization (both must be `Accepted`), and DMG stapling/validation must

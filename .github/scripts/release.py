@@ -61,19 +61,38 @@ def check_available(repo, tag):
     )
     if access.returncode != 0:
         raise RuntimeError(f"Cannot establish repository access: {access.stderr}")
-    for endpoint in (f"git/ref/tags/{tag}", f"releases/tags/{tag}"):
-        result = subprocess.run(
-            ["gh", "api", "--include", f"repos/{repo}/{endpoint}"],
-            text=True, capture_output=True, check=False,
-        )
-        statuses = re.findall(r"^HTTP/\S+\s+([0-9]{3})\b", result.stdout, re.MULTILINE)
-        status = statuses[-1] if statuses else None
-        if result.returncode != 0 and status == "404":
-            continue
-        if result.returncode == 0 and status == "200":
-            raise ValueError(f"{tag} already exists: {endpoint}")
+    result = subprocess.run(
+        ["gh", "api", "--include", f"repos/{repo}/git/ref/tags/{tag}"],
+        text=True, capture_output=True, check=False,
+    )
+    statuses = re.findall(r"^HTTP/\S+\s+([0-9]{3})\b", result.stdout, re.MULTILINE)
+    status = statuses[-1] if statuses else None
+    if result.returncode == 0 and status == "200":
+        raise ValueError(f"{tag} already exists: git tag")
+    if not (result.returncode != 0 and status == "404"):
         raise RuntimeError(f"Cannot establish availability of {tag}: "
                            f"{result.stdout}\n{result.stderr}")
+
+    # Authenticated listings include drafts; release-by-tag does not.
+    result = subprocess.run(
+        ["gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"],
+        text=True, capture_output=True, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Cannot establish release availability of {tag}: {result.stderr}")
+    try:
+        pages = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Cannot establish release availability: malformed JSON") from error
+    if (not isinstance(pages, list) or not pages
+            or any(not isinstance(page, list) for page in pages)
+            or any(not isinstance(item, dict)
+                   or not isinstance(item.get("tag_name"), str) or not item["tag_name"]
+                   or not isinstance(item.get("draft"), bool)
+                   for page in pages for item in page)):
+        raise RuntimeError("Cannot establish release availability: malformed release pages")
+    if any(item["tag_name"] == tag for page in pages for item in page):
+        raise ValueError(f"{tag} already exists: published or draft release")
 
 
 def publish(root, repo, sha, assets):
