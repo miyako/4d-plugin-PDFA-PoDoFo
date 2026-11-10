@@ -10,6 +10,16 @@ env:
   PRODUCT_NAME: PDFA
 
 jobs:
+  string-ownership:
+    name: String ownership (ASan + UBSan)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Check synchronous status string cleanup
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/tests -p test_string_ownership.py -v
+
   build-mac:
     name: Build macOS (arm64)
     runs-on: macos-latest
