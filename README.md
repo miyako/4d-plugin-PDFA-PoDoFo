@@ -135,6 +135,32 @@ Tests use fixed version-independent fixtures, live source consistency checks,
 isolated local Git remotes, and a full-suite rerun after bumping a temporary source
 copy. No remote tag, release, or workflow is created by these checks.
 
+### String ownership regression (macOS)
+
+`returnStatus` owns the temporary JSON string passed to synchronous JSON Parse
+(command 1218). The pinned SDK shallow-assigns that string into the input variable;
+the helper disposes it once after parsing, without clearing the input alias again
+or disposing the object returned to 4D.
+
+```bash
+git submodule update --init 4D-Plugin-SDK
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/tests -p test_string_ownership.py -v
+```
+
+This compiles the actual status/path helpers and pinned SDK against a narrow host
+shim, with ASan and UBSan, without PoDoFo, plugin builds or packaging. It checks
+6,000 success/error status returns, exact ASCII/BMP/supplementary text and escaping,
+single string cleanup, returned-object preservation, and null/allocated empty
+string representations. Charset conversion returns bytes, as required by the SDK.
+The original helper fails the live-allocation assertion on its first status return.
+This is not a test in a real 4D host or a Windows host-crash reproduction.
+The audited SDK is `4d/4D-Plugin-SDK` at
+`cd97d1876d4258b56d2516e8ad2816f4ee93e0b5` (implementation header `rev: v14`,
+API header `rev: v13`; not an upstream release identifier). The runner extracts
+the helpers verbatim with unique boundary/signature assertions; it does not keep
+a second implementation. `PDFA_OWNERSHIP_SOURCE` can select an original source
+snapshot to reproduce the pre-fix failure with the same harness.
+
 ## License
 
 - Plugin code: MIT

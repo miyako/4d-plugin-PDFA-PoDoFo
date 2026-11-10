@@ -108,6 +108,7 @@ static void returnStatus(PA_PluginParameters params, int code, const std::string
     PA_SetStringVariable(&cmdParams[0], &jsonUstr);
     PA_SetLongintVariable(&cmdParams[1], eVK_Object);
     PA_Variable result = PA_ExecuteCommandByID(1218, cmdParams, 2);
+    PA_DisposeUnistring(&jsonUstr);
 
     PA_ReturnObject(params, PA_GetObjectVariable(result));
 }
